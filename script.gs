@@ -3,7 +3,40 @@ function main() {
   let threadsNew = GmailApp.search("from:confirmation@omniplex.ie");
   let emailBody = threadsNew[0].getMessages()[0].getBody();
   let movieInfo = extractMovieInfo(emailBody);
-  console.log(movieInfo);
+  // console.log(movieInfo);
+  createCalendarEvent(movieInfo);
+}
+
+function createCalendarEvent(movie, people=[]) {
+  let endDate = new Date(movie.startDateTime);
+  endDate.setHours(endDate.getHours() + movie.runtime.hours);
+  endDate.setMinutes(endDate.getMinutes() + movie.runtime.minutes);
+  console.log(endDate);
+  console.log(movie.startDateTime);
+  CalendarApp.createEvent(
+    movie.title,
+    movie.startDateTime,
+    endDate,
+    {
+      description:
+      `Below is the information for ${movie.title}, at ${movie.cinemaName}
+
+Screen: ${movie.screen}
+Seat: ${movie.seat}
+`,
+      location: `${movie.cinemaName} ${movie.location.streetAddress}, ${movie.location.addressLocality}, ${movie.location.addressRegion}, ${movie.location.postalCode}`
+    }
+  )
+}
+
+function strToTime(timeStr) {
+  let splitTime = timeStr.trim().split(" ");
+  return {
+    // If hours is 1hr, then only remove the last 2 characters, otherwise we can assume it is 'hrs' and therefore need to remove last 3 characters
+    hours: splitTime[0].length === 3 ? parseInt(splitTime[0].slice(0, -2)) : parseInt(splitTime[0].slice(0, -3)),
+    // Currently it always ends in 'min' no matter how many minutes it is
+    minutes: parseInt(splitTime[1].slice(0, -3))
+  }
 }
 
 /*
@@ -13,23 +46,25 @@ function main() {
  * 
  * The location, movie title and cinema name is stored within an object, that is contained in the script tag
  */
-function extractMovieInfo(emailBody) {
+function extractMovieInfo(emailBody, adTime=10) {
   let bodyArry = emailBody.split('\n');
   
   let movie = {
     title:"",
     screen:"",
     seat:"",
-    runtime:"",
-    dateTime:"",
+    runtime: {
+      hours:"",
+      minutes:""
+    },
+    startDateTime:"",
     location: {
       streetAddress: "",
       addressLocality: "",
       addressRegion: "",
       postalCode: ""
     },
-    cinemaName:"",
-    startTime:""
+    cinemaName:""
   }
 
   let scriptObjArry = [];
@@ -38,6 +73,8 @@ function extractMovieInfo(emailBody) {
   for (let i=0; i<bodyArry.length-1; i++) {
     let line = bodyArry[i];
     let nextValue = "";
+
+    // console.log(line);
 
     // retrieves the information for the script tag
     if(line.includes("<script")) {
@@ -64,7 +101,8 @@ function extractMovieInfo(emailBody) {
     }
 
     if(line.includes("RUNNING TIME")) {
-      movie.runtime = nextValue;
+      movie.runtime = strToTime(nextValue);
+      movie.runtime.minutes += adTime
     } else if (line.includes("SCREEN") && !line.includes("TYPE")) {
       movie.screen = nextValue;
     } else if (line.includes("TIME")) {
@@ -87,7 +125,7 @@ function extractMovieInfo(emailBody) {
   movie.location.postalCode = scriptObj.reservationFor.location.address.postalCode;
   
   movie.title = scriptObj.reservationFor.name;
-  movie.dateTime = new Date(scriptObj.reservationFor.startDate);
+  movie.startDateTime = new Date(scriptObj.reservationFor.startDate);
 
   return movie;
 }
