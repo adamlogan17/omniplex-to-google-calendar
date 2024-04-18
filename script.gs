@@ -1,18 +1,26 @@
-// TODO Need to see if there is a way to attach QR code to calendar
 function main() {
-  let threadsNew = GmailApp.search("from:confirmation@omniplex.ie");
-  let emailBody = threadsNew[0].getMessages()[0].getBody();
-  let movieInfo = extractMovieInfo(emailBody);
-  // console.log(movieInfo);
-  createCalendarEvent(movieInfo);
+  // Within the subject of the email, normally it would contain the cinema cinema name after the '-' but by leaving this out, this allows the seacrh to cover all locations
+  // TODO make the search term a smaller time frame to lower the amount of emails that need to be checked
+  let threadsNew = GmailApp.search("from:(confirmation@omniplex.ie) subject:(Omniplex Cinemas - : Booking Confirmation)");
+  const TRIGGERINTERVAL = 1000 * 60 * 10;
+  const timeAtLastTrigger = new Date() - TRIGGERINTERVAL;
+  for (thread of threadsNew) {
+    for(email of thread.getMessages()) {
+      sentTime = email.getDate();
+      // checks all relevant emails, to see if they are within the last 10 minutes
+      if (sentTime > timeAtLastTrigger) {
+        let emailBody = email.getBody();
+        let movieInfo = extractMovieInfo(emailBody);
+        createCalendarEvent(movieInfo);
+      }
+    }
+  }
 }
 
 function createCalendarEvent(movie, people=[]) {
   let endDate = new Date(movie.startDateTime);
   endDate.setHours(endDate.getHours() + movie.runtime.hours);
   endDate.setMinutes(endDate.getMinutes() + movie.runtime.minutes);
-  console.log(endDate);
-  console.log(movie.startDateTime);
   CalendarApp.createEvent(
     movie.title,
     movie.startDateTime,
@@ -23,6 +31,8 @@ function createCalendarEvent(movie, people=[]) {
 
 Screen: ${movie.screen}
 Seat: ${movie.seat}
+
+The QR code can be downloaded at ${movie.qrCodeUrl}
 `,
       location: `${movie.cinemaName} ${movie.location.streetAddress}, ${movie.location.addressLocality}, ${movie.location.addressRegion}, ${movie.location.postalCode}`
     }
@@ -64,7 +74,10 @@ function extractMovieInfo(emailBody, adTime=10) {
       addressRegion: "",
       postalCode: ""
     },
-    cinemaName:""
+    cinemaName:"",
+    qrCodeUrl:"",
+    ticket:"",
+    moviePoster:""
   }
 
   let scriptObjArry = [];
@@ -73,7 +86,9 @@ function extractMovieInfo(emailBody, adTime=10) {
   for (let i=0; i<bodyArry.length-1; i++) {
     let line = bodyArry[i];
     let nextValue = "";
+    let imgLink = "";
 
+    // The below line is used for debugging and is used to log the whole body of the email
     // console.log(line);
 
     // retrieves the information for the script tag
@@ -97,7 +112,15 @@ function extractMovieInfo(emailBody, adTime=10) {
       */
       nextValue = XmlService.parse(bodyArry[i+1]).getContent(0).getValue();
     } catch {
-      nextValue = "PARSING ERROR"
+      nextValue = "PARSING ERROR";
+    }
+
+    // two try catch blocks are used as one line may cause an error but the other should be properly defined
+    try {
+      // The below is how to extract the value for the 'src' attribute, all images in the table are the second element of the line, in which they are defines
+      imgLink = XmlService.parse(line).getContent(1).getAttribute("src").getValue();
+    } catch {
+      imgLink = "PARSING ERROR";
     }
 
     if(line.includes("RUNNING TIME")) {
@@ -109,12 +132,16 @@ function extractMovieInfo(emailBody, adTime=10) {
       movie.startTime = nextValue;
     } else if (line.includes("SEATS")) {
       movie.seat = nextValue;
+    } else if (line.includes("dynamic/QRcodes")) {
+      movie.qrCodeUrl = imgLink;
+    } else if (line.includes("filmimages")) {
+      // the small version of the image is within the body of the email, but by swapping out 'small' with 'large' a larger version is retrieved (it appears a medium option is not available)
+      movie.moviePoster = imgLink.replace("small", "large");
     }
   }
 
   // transform the scriptObjArry into a parsable format and then parse into an Object for easy information extraction
   scriptObjArry[0] = "{";
-  scriptObjStr = scriptObjArry.join("");
   scriptObj = JSON.parse(scriptObjArry.join(""));
 
   // Adds the information from the scipt tag into the movie object
@@ -126,6 +153,9 @@ function extractMovieInfo(emailBody, adTime=10) {
   
   movie.title = scriptObj.reservationFor.name;
   movie.startDateTime = new Date(scriptObj.reservationFor.startDate);
+
+  // There is a different link for just the QR code, rather than this link, which downloads the ticket as a pdf
+  movie.ticket = scriptObj.ticketDownloadUrl;
 
   return movie;
 }
