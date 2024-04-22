@@ -4,17 +4,93 @@ function main() {
   let threadsNew = GmailApp.search("from:(confirmation@omniplex.ie) subject:(Omniplex Cinemas - : Booking Confirmation)");
   const TRIGGERINTERVAL = 1000 * 60 * 10;
   const timeAtLastTrigger = new Date() - TRIGGERINTERVAL;
+  let allMovies = [];
+
   for (thread of threadsNew) {
     for(email of thread.getMessages()) {
       sentTime = email.getDate();
       // checks all relevant emails, to see if they are within the last 10 minutes
       if (sentTime > timeAtLastTrigger) {
         let emailBody = email.getBody();
-        let movieInfo = extractMovieInfo(emailBody);
+        try {
+          let movieInfo = extractMovieInfo(emailBody);
+          allMovies.push(movieInfo);
+        } catch {}
         createCalendarEvent(movieInfo);
       }
     }
   }
+  addToMovieSpreadsheet(allMovies);
+
+}
+
+// TODO, maybe create a 'map' object and use .indexOf to place the elemeents in moviesAsArry, allowing for the header names to be changed with relative ease
+function addToMovieSpreadsheet(movies, ssName="Omnipass Movies") {
+  const thisScriptid = ScriptApp.getScriptId();
+  const thisFolder = DriveApp.getFileById(thisScriptid).getParents().next();
+  let ss;
+  let sheet;
+  // This is needed as ss, needs to be defined before sheet can be defined, which takes place after the if statement to check
+  // if the spreadsheet exists and therefore another condition is needed to prevent the header being constantly set
+  let addHeader = false;
+  const COLUMNWIDTH = 200;
+  const ROWHEIGHT = 300;
+  const HEADER = ["Title", "Movie Poster", "Screen", "Seat Number", "Runtime", "Start Date", "Start Time", "Cinema Name", "Address", "QR Code URL", "Ticket Download"];
+
+  if(!thisFolder.getFilesByName(ssName).hasNext()) {
+    ss = SpreadsheetApp.create(ssName);
+    DriveApp.getFileById(ss.getId()).moveTo(thisFolder);
+
+    addHeader = true;
+
+    // allow the script to access external data, to insert the images direclty into the spreadsheet
+    const endpoint = `https://docs.google.com/spreadsheets/u/0/d/${ss.getId()}/externaldata/allowexternalurlaccess`;
+    const params = {
+      method: "post",
+      headers: { authorization: "Bearer " + ScriptApp.getOAuthToken() },
+    };
+    UrlFetchApp.fetch(endpoint, params);
+  } else {
+    ss = SpreadsheetApp.open(thisFolder.getFilesByName(ssName).next());
+  }
+
+  sheet = ss.getSheets()[0];
+
+  if(addHeader) {
+    let headerRange = sheet.getRange(`A1:${String.fromCharCode(HEADER.length + 64)}1`);
+    // the font and text colour matches Omniplex branding
+    headerRange.setFontColor('#fbeb47').setFontWeight('bold').setBackground('#191919').setHorizontalAlignment("center").setWrap(true);
+    headerRange.setValues([HEADER]);
+    
+    // Allows for the images to be larger
+    sheet.setColumnWidth(HEADER.indexOf('Movie Poster') + 1, COLUMNWIDTH);
+    sheet.setColumnWidth(HEADER.indexOf('QR Code URL') + 1, COLUMNWIDTH);
+  }
+
+  let moviesAsArry = movies.map((movie) => [
+    movie.title,
+    insertCellImage(movie.moviePoster),
+    movie.screen, 
+    movie.seat, 
+    `${movie.runtime.hours}hr(s) ${movie.runtime.minutes}min(s)`,
+    movie.startDateTime.toLocaleDateString("en-GB"),
+    `${movie.startDateTime.getHours()}:${movie.startDateTime.getMinutes()}`,
+    movie.cinemaName,
+    `${movie.location.streetAddress}, ${movie.location.addressLocality}, ${movie.location.postalCode}`,
+    insertCellImage(movie.qrCodeUrl),
+    movie.ticket
+  ]);
+
+
+  sheet.setRowHeights(sheet.getLastRow() + 1, movies.length, ROWHEIGHT);
+
+  let movieRange = sheet.getRange(sheet.getLastRow() + 1, 1, movies.length, HEADER.length);
+  movieRange.setValues(moviesAsArry).setWrap(true);
+}
+
+// TODO give optional parameter, for the scipt to allow the spreadsheet external url access
+function insertCellImage(imageUrl) {
+  return `=IMAGE("${imageUrl}")`
 }
 
 function createCalendarEvent(movie, people=[]) {
@@ -56,6 +132,7 @@ function strToTime(timeStr) {
  * 
  * The location, movie title and cinema name is stored within an object, that is contained in the script tag
  */
+// TODO Currently adTime will result in a 65mins, rather than adding an hour to the time
 function extractMovieInfo(emailBody, adTime=10) {
   let bodyArry = emailBody.split('\n');
   
@@ -106,7 +183,7 @@ function extractMovieInfo(emailBody, adTime=10) {
       // The relevant value is continued within the p tag of the next line, of the tag which contains the actual value
       // The below comment is not exact, it is used for illustration purposes only
       /*
-      <td id='RUNNUNG TIME' />
+      <td id='RUNNING TIME' />
         <p>2hrs 20mins</p>
       </td>
       */
@@ -144,7 +221,7 @@ function extractMovieInfo(emailBody, adTime=10) {
   scriptObjArry[0] = "{";
   scriptObj = JSON.parse(scriptObjArry.join(""));
 
-  // Adds the information from the scipt tag into the movie object
+  // Adds the information from the script tag into the movie object
   movie.cinemaName = scriptObj.reservationFor.location.name;
   movie.location.streetAddress = scriptObj.reservationFor.location.address.streetAddress;
   movie.location.addressLocality = scriptObj.reservationFor.location.address.addressLocality;
