@@ -1,5 +1,5 @@
 function main() {
-  // Within the subject of the email, normally it would contain the cinema cinema name after the '-' but by leaving this out, this allows the seacrh to cover all locations
+  // Within the subject of the email, normally it would contain the cinema cinema name after the '-' but by leaving this out, this allows the search to cover all locations
   // TODO make the search term a smaller time frame to lower the amount of emails that need to be checked
   let threadsNew = GmailApp.search("from:(confirmation@omniplex.ie) subject:(Omniplex Cinemas - : Booking Confirmation)");
   const TRIGGERINTERVAL = 1000 * 60 * 10;
@@ -22,7 +22,9 @@ function main() {
       }
     }
   }
-  addToMovieSpreadsheet(allMovies);
+  if (allMovies.length > 0) {
+    addToMovieSpreadsheet(allMovies);
+  }
 }
 
 /**
@@ -73,7 +75,7 @@ function addToMovieSpreadsheet(movies, ssName="Omnipass Movies") {
 
     addHeader = true;
 
-    // allow the script to access external data, to insert the images directly into the spreadsheet
+    // allow the script to access external data, to insert the images direclty into the spreadsheet
     const endpoint = `https://docs.google.com/spreadsheets/u/0/d/${ss.getId()}/externaldata/allowexternalurlaccess`;
     const params = {
       method: "post",
@@ -126,7 +128,7 @@ function addToMovieSpreadsheet(movies, ssName="Omnipass Movies") {
  * @param {string} imageUrl - The URL of the image to be inserted.
  * @returns {string} - The formula to insert the image into a cell.
  * 
- * @todo give optional parameter, for the scipt to allow the spreadsheet external url access
+ * @todo give optional parameter, for the script to allow the spreadsheet external url access
  */
 function insertCellImage(imageUrl) {
   return `=IMAGE("${imageUrl}")`
