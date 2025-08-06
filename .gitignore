@@ -1,2 +1,3 @@
 desktop.ini
-Omnipass Movies.gsheet
+*.gsheet
+.vscode
