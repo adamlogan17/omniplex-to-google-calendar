@@ -243,7 +243,9 @@ function formWhatsOnUrl(movieTitle, region='') {
     .replaceAll('(', '')
     .replaceAll(')', '')
     .replaceAll(',', '')
-    .replaceAll('&', '');
+    .replaceAll('&', '')
+    .replaceAll('?', '-')
+    .replaceAll("'", '-');
 
   let baseIeUrl = "https://www.omniplex.ie";
   let baseUkUrl = "https://www.omniplexcinemas.co.uk";
