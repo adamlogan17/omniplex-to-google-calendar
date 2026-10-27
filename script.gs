@@ -3,6 +3,9 @@ function main() {
   // @todo make the search term a smaller time frame to lower the amount of emails that need to be checked
   let threadsNew = GmailApp.search("from:(confirmation@omniplex.ie) subject:(Omniplex Cinemas - : Booking Confirmation)");
   const TRIGGERINTERVAL = 1000 * 60 * 10;
+  // const TRIGGERINTERVAL = 1000 * 60 * (1440 * 30);
+  // const TRIGGERINTERVAL = 1000 * 60 * (1440 * 180);
+  // const TRIGGERINTERVAL = 1000 * 60 * (1440 * 300);
   const timeAtLastTrigger = new Date() - TRIGGERINTERVAL;
   let allMovies = [];
 
@@ -21,8 +24,41 @@ function main() {
       }
     }
   }
+  console.log(allMovies);
   if (allMovies.length > 0) {
     addToMovieSpreadsheet(allMovies);
+  }
+}
+
+function test() {
+  // Within the subject of the email, normally it would contain the cinema cinema name after the '-' but by leaving this out, this allows the search to cover all locations
+  // @todo make the search term a smaller time frame to lower the amount of emails that need to be checked
+  let threadsNew = GmailApp.search("from:(confirmation@omniplex.ie) subject:(Omniplex Cinemas - : Booking Confirmation)");
+  // const TRIGGERINTERVAL = 1000 * 60 * 10;
+  // const TRIGGERINTERVAL = 1000 * 60 * (1440 * 30);
+  // const TRIGGERINTERVAL = 1000 * 60 * (1440 * 180);
+  const TRIGGERINTERVAL = 1000 * 60 * (1440 * 300);
+  const timeAtLastTrigger = new Date() - TRIGGERINTERVAL;
+  let allMovies = [];
+
+  for (thread of threadsNew) {
+    for(email of thread.getMessages()) {
+      sentTime = email.getDate();
+      let movieInfo;
+      // checks all relevant emails, to see if they are within the last 10 minutes (timeAtLastTrigger)
+      if (sentTime > timeAtLastTrigger) {
+        let emailBody = email.getBody();
+        try {
+          movieInfo = extractMovieInfo(emailBody);
+          allMovies.push(movieInfo);
+        } catch (e) { console.log(e) }
+        createCalendarEvent(movieInfo, adTime=15);
+      }
+    }
+  }
+  console.log(allMovies);
+  if (allMovies.length > 0) {
+    // addToMovieSpreadsheet(allMovies, ssName="Test Script");
   }
 }
 
@@ -224,9 +260,11 @@ function manuallyRetrieveLink(brokenTag, startSearchTerm='src="', endSearchTerm=
  *
  * @param {string} movieTitle - The title of the movie to generate the showtimes URL for.
  * @param {string} [region=''] - Optional region code. Use `'uk'` for the UK site, anything else defaults to Ireland.
+ * @param {string} [legacy=false] - Optional legacy flag. Set to true, to use the older "whatson" format for the URL. This should be used for movies after May 2026.
+ * @param {string} [location="belfast"] - Optional location. Set to a specific cinema location, this only appears to matter if showtimes are required. If not any valid location can be used, and movie details can still be fetched. This is ignored if `legacy` is set to true.
  * @returns {{url: string, regionUrl: string}} An object containing the full showtimes URL and the selected base regional URL.
  */
-function formWhatsOnUrl(movieTitle, region='') {
+function formWhatsOnUrl(movieTitle, region='', legacy=false, location='') {
   // A special replace has to happen for movies with a ')' as the last char, as this should replace to '-' instead of just getting rid of the character
   let lastChar = movieTitle.slice(-1);
   if (lastChar == ')') {
@@ -250,7 +288,14 @@ function formWhatsOnUrl(movieTitle, region='') {
   let baseIeUrl = "https://www.omniplex.ie";
   let baseUkUrl = "https://www.omniplexcinemas.co.uk";
 
-  let whatsOnUrl = "/whatson/movie/showtimes/";
+  if (!location) {
+    location = "all"
+  }
+
+  let whatsOnUrl = `/cinema/movie/${location}/`;
+  if (legacy) {
+    whatsOnUrl = "/whatson/movie/showtimes/";
+  }
 
   let regionUrl = '';
   if (region === "uk") {
@@ -307,79 +352,22 @@ function getLatestArchivedBody(originalUrl, noMovieMssg="Unable to find Movie") 
   return null;
 }
 
+function legacyScrapeWhatsOnFilter(siteBody) {
+  let whatsOnInfo = {};
+  let bodyArry = siteBody.split('\n');
+  const runtimeRegex = new RegExp("[0-9]*hrs? [0-9]*min");
+  const parsingErrMssg = "PARSING ERROR";
 
-/**
- * Scrapes metadata for a movie from the Omniplex "What's On" page.
- * 
- * Given a movie title and region (UK or Ireland), this function constructs a URL to the 
- * Omniplex "What's On" page and scrapes metadata including runtime, description, cast, 
- * genres, director, and age ratings.
- * 
- * This is a fallback/enrichment function used to supplement movie data when not fully 
- * available in the email body. The function processes the HTML of the webpage line-by-line,
- * extracting relevant content using XML parsing and regex.
- * 
- * @param {string} movieTitle - The title of the movie to query (e.g., "Inside Out 2").
- * @param {string} [region='uk'] - The Omniplex region: "uk" (default) or "ie" for Ireland.
- * @param {string} [noMovieMssg='Unable to find Movie'] - A message, which is displayed by the site if the movie cannot be found
- * 
- * @returns {{
- *   runtime: {
- *     hours?: number,
- *     minutes?: number
- *   },
- *   description: string,
- *   starring: string[],
- *   director: string,
- *   genres: string[],
- *   ageRatings: Array<{
- *     rating: string,
- *     agency: string,
- *     image: string
- *   }>
- * }} An object containing scraped movie metadata.
- */
-function scrapeWhatsOn(movieTitle, region='uk', noMovieMssg="Unable to find Movie") {
-  let urlComponents = formWhatsOnUrl(movieTitle, region=region);
-  let regionUrl = urlComponents.regionUrl;
-  const fullUrl = urlComponents.url;
-
-  let runtimeRegex = new RegExp(".*\\d{1,2}hrs?\\s\\d{1,2}mins?.*");
-
-  let whatsOnInfo = {
-    'runtime': {},
-    'description': '',
-    'starring': [],
-    'director': '',
-    'genres': [],
-    'ageRatings': []
-  }
-
-  parsingErrMssg = "PARSING ERROR";
-
-  const response = UrlFetchApp.fetch(fullUrl);
-  let body = response.getContentText();
-
-  if (body.includes(noMovieMssg)) {
-    // Uses the default base URL for the wayback machine
-    let wayBackMachine = formWhatsOnUrl(movieTitle);
-    let wayBackMachineUrl = wayBackMachine.url;
-    console.log(wayBackMachineUrl);
-    body = getLatestArchivedBody(wayBackMachineUrl);
-    if (body === null) {
-      body = '';
-    }
-    regionUrl = wayBackMachine.regionUrl;
-  }
-
-  let bodyArry = body.split('\n');
   // There is a space after the comma on the site, this is why there is a space to remove it here
   let splitArrayStr = ', ';
   for (let i=0; i<bodyArry.length-1; i++) {
     let line = bodyArry[i].trim();
+    console.log(line);
     let currentValue = xmlGetValue(bodyArry, i);
     if (runtimeRegex.test(line)) {
+      console.log("check")
       whatsOnInfo.runtime = strToTime(currentValue);
+      console.log('runtime', whatsOnInfo.runtime);
     } else if (currentValue === 'Description') {
       // A break tag needs to be removed first, to allow for the parsing to work
       bodyArry[i+1] = bodyArry[i+1].replace('<br />', '');
@@ -413,14 +401,261 @@ function scrapeWhatsOn(movieTitle, region='uk', noMovieMssg="Unable to find Movi
           rating = parsingErrMssg;
         }
         return {
-          'rating': rating,
-          'agency': ratingAgency,
-          'image': `${regionUrl}${ratingImage}`
+          rating: rating,
+          agency: ratingAgency,
+          image: `${regionUrl}${ratingImage}`
+        }
+      });
+    }
+  }
+  console.log('scraped', whatsOnInfo);
+  return whatsOnInfo;
+}
+
+
+/**
+ * Scrapes metadata for a movie from the Omniplex "What's On" page.
+ * 
+ * Given a movie title and region (UK or Ireland), this function constructs a URL to the 
+ * Omniplex "What's On" page and scrapes metadata including runtime, description, cast, 
+ * genres, director, and age ratings.
+ * 
+ * This is a fallback/enrichment function used to supplement movie data when not fully 
+ * available in the email body. The function processes the HTML of the webpage line-by-line,
+ * extracting relevant content using XML parsing and regex.
+ * 
+ * @param {string} movieTitle - The title of the movie to query (e.g., "Inside Out 2").
+ * @param {string} [region='uk'] - The Omniplex region: "uk" (default) or "ie" for Ireland.
+ * @param {string} [noMovieMssg='Unable to find Movie'] - A message, which is displayed by the site if the movie cannot be found
+ * 
+ * @returns {{
+ *   runtime: {
+ *     hours?: number,
+ *     minutes?: number
+ *   },
+ *   description: string,
+ *   starring: string[],
+ *   director: string,
+ *   genres: string[],
+ *   ageRatings: Array<{
+ *     rating: string,
+ *     agency: string,
+ *     image: string
+ *   }>
+ * }} An object containing scraped movie metadata.
+ */
+function scrapeWhatsOn(movieTitle, location='', legacy=false, region='uk') {
+  let urlComponents = formWhatsOnUrl(movieTitle, region=region, legacy=legacy, location=location);
+  let regionUrl = urlComponents.regionUrl;
+  const fullUrl = urlComponents.url;
+
+  let runtimeRegex = new RegExp("[0-9]*hrs? [0-9]*min");
+
+  let whatsOnInfo = {
+    runtime: {},
+    description: '',
+    starring: [],
+    director: '',
+    genres: [],
+    // This needs to be a list, as the legacy sites had several rating agencies contained in them
+    ageRatings: []
+  }
+
+  parsingErrMssg = "PARSING ERROR";
+
+  const response = UrlFetchApp.fetch(fullUrl);
+  let body = response.getContentText();
+
+  let noMovieMssg = legacy ? "Unable to find Movie" : "An error has occured"
+  if (body.includes(noMovieMssg)) {
+    // TODO - Currently the new format does not work as well with the wayback machine, as there
+    // are multiple links that may work, due to the different locations. So although 'belfast'
+    // may not have the required info 'banbridge' might
+
+    // Uses the default base URL for the wayback machine
+    let wayBackMachine = formWhatsOnUrl(movieTitle, legacy=legacy);
+    let wayBackMachineUrl = wayBackMachine.url;
+    body = getLatestArchivedBody(wayBackMachineUrl);
+    if (body === null) {
+      body = '';
+    }
+    regionUrl = wayBackMachine.regionUrl;
+  }
+
+  if (legacy) {
+    return legacyScrapeWhatsOnFilter(body);
+  }
+
+  let bodyArry = body.split('\n');
+  // There is a space after the comma on the site, this is why there is a space to remove it here
+  let splitArrayStr = ', ';
+  for (let i=0; i<bodyArry.length-1; i++) {
+    let line = bodyArry[i];
+    let currentValue = xmlGetValue(bodyArry, i);
+    if (line.includes("showtime-age-rating-img")) {
+      let ratingInfo = {}
+      // Rating Info
+      let srcAttributeRegex = new RegExp('src=".*"');
+      let srcAsArry = line.match(srcAttributeRegex);
+      // Assumes there is only one match
+      let fullSrcAttribute = srcAsArry[0];
+      let cleanedLink = fullSrcAttribute.substring(5, fullSrcAttribute.length-1);
+      let ratingLink = `${urlComponents.regionUrl}${cleanedLink}`;
+      ratingInfo.image = ratingLink;
+      let splitLink = cleanedLink.split("/");
+      let uncleanedRating = splitLink[splitLink.length-1];
+      let splitRating = uncleanedRating.split("_");
+      let ageRatingRegion = splitRating[0].toLowerCase();
+      // The '[]' around the '.' is to escape this, as it is a special character in regex
+      ratingInfo.rating = splitRating[1].replace(new RegExp("[.][a-z]*") , "");;
+      if (ageRatingRegion === "uk") {
+        ratingInfo.agency = "BBFC"
+      } else if (ageRatingRegion === "ie") {
+        ratingInfo.agency = "IFCO"
+      }
+      whatsOnInfo.ageRatings = [ ratingInfo ];
+
+      // Runtime Info
+      let uncleanedRuntimeStr = xmlGetValue(bodyArry, i, offset=1);
+      let runtimeStr = uncleanedRuntimeStr.match(runtimeRegex)[0];
+      whatsOnInfo.runtime = strToTime(runtimeStr);
+
+      // Genre info
+      let genreStr = xmlGetValue(bodyArry, i, offset=2);
+      let removePipe = genreStr.replace("| ", "");
+      whatsOnInfo.genres = removePipe.split(splitArrayStr);
+    } else if (line.includes('moviesCard')) {
+      whatsOnInfo.description = xmlGetValue(bodyArry, i, offset=2).trim();
+    } else if (line.includes('Starring')) {
+      let removeStarring = currentValue.replace("Starring: ", "");
+      whatsOnInfo.starring = removeStarring.split(splitArrayStr);
+    } else if (line.includes('Director')) {
+      let removeDirector = currentValue.replace("Director: ", "");
+      whatsOnInfo.director = removeDirector.split(splitArrayStr);
+    } else if (currentValue === 'Genres') {
+      whatsOnInfo.genres = xmlGetValue(bodyArry, i, offset=1).split(splitArrayStr);
+    } else if (line.includes("OMP_ratingRunningSection")) {
+      let nextLine = bodyArry[i+1].trim();
+      // Returns a list of image tags, using regex to find a match for <img ... />
+      let imageTags = nextLine.match(/<img[^>]*\/>/g);
+      whatsOnInfo.ageRatings = imageTags.map((tag) => {
+        let rating = '';
+        let ratingAgency = '';
+        let ratingImage = '';
+        try {
+          let xmlImgTag = XmlService.parse(tag).getContent(0);
+          let jointAgencyRating = xmlImgTag.getAttribute("title").getValue();
+          let splitAgencyRating = jointAgencyRating.split(" - ");
+          ratingAgency = splitAgencyRating[0];
+          rating = splitAgencyRating[1];
+          ratingImage = xmlImgTag.getAttribute("src").getValue();
+        } catch {
+          ratingImage = manuallyRetrieveLink(tag);
+          if (ratingImage.length <= 0) {
+            ratingImage = parsingErrMssg;
+          }
+          rating = parsingErrMssg;
+        }
+        return {
+          rating: rating,
+          agency: ratingAgency,
+          image: `${regionUrl}${ratingImage}`
         }
       });
     }
   }
   return whatsOnInfo;
+}
+
+/**
+ *  @param {string} ticketUrl - The URL for the 'print at home' ticket, which omniplex provides.
+ * 
+ *  @returns {{
+ *   title: string,
+ *   startDateTime:Date,
+ *   moviePoster: string,
+ *   qrCodeUrl:string,
+ *   seat:string,
+ *   cinemaName:string,
+ *   screen:string,
+ *   ageRatings:Array<{
+ *     rating: string,
+ *   }>
+ * }} An object containing scraped movie metadata.
+ */
+function scrapePrintAtHomeTicket(ticketUrl) {
+  const response = UrlFetchApp.fetch(ticketUrl);
+  let body = response.getContentText();
+
+  let bodyArry = body.split('\n');
+
+  // Due to the ticket being more unlikely to change format,
+  // It was decided to allow information to be ripped directly
+  // through it's position in the ticket
+  let unCleanedMovieData = {
+    title: bodyArry[21],
+    startDateTime: bodyArry[26],
+    qrCodeUrl: bodyArry[12],
+    moviePoster: bodyArry[35],
+    seat: bodyArry[29],
+    cinemaName: bodyArry[22],
+    screen: bodyArry[27],
+    rating: bodyArry[31],
+  }
+  let cleanedMovieData = {};
+  let startTime;
+  for (let key of Object.keys(unCleanedMovieData)) {
+    if (key === 'qrCodeUrl') {
+      // The QR code URL contains unescaped characters, such as '&', which 
+      // causes the XMLService parser to fail, so the below method is used
+      let srcAttributeRegex = new RegExp('src=".*"');
+      let srcAsArry = unCleanedMovieData[key].match(srcAttributeRegex);
+      // Assumes there is only one match
+      let fullSrcAttribute = srcAsArry[0];
+      let cleanedLink = fullSrcAttribute.substring(5, fullSrcAttribute.length-1);
+      cleanedMovieData[key] = `https://www.omniplex.ie${cleanedLink}`;
+      continue
+    }
+    let parsedStr = XmlService.parse(unCleanedMovieData[key].trim());
+    let pdfElement = parsedStr.getRootElement();
+    if (key === 'moviePoster') {
+      // Add the base url, to the image url
+      cleanedMovieData[key] = `https://www.omniplex.ie${pdfElement.getAttribute("src").getValue().trim()}`;
+      continue
+    }
+
+    elementText = pdfElement.getText().trim();
+
+    if (key === 'rating') {
+      // Removes the brackets from the rating
+      cleanedMovieData[key] = elementText.substring(1, elementText.length-1);
+      continue
+    }
+
+    if (key === 'screen') {
+      let timeScreenArry = elementText.split(' ');
+      startTime = timeScreenArry[0];
+      let rawScreenNum = timeScreenArry[3];
+      // Re-add "Screen" prefix and remove trailing ')', the first '(' is left out during the split
+      let screen = `Screen ${rawScreenNum.substring(0, rawScreenNum.length-1)}`;
+      cleanedMovieData[key] = screen;
+      continue
+    }
+    cleanedMovieData[key] = elementText;
+  }
+
+  // Having the 'th' in 28th prevents the string from being parsed into a date, therefore it needs to be removed
+  let validDateStr = cleanedMovieData.startDateTime.replace(new RegExp('([0-9]+)(st|nd|rd|th)'), '$1');
+  // If the start time is available, include this, if not it defaults to midnight UTC
+  if (startTime) {
+    validDateStr = `${validDateStr} ${startTime}`;
+  }
+  cleanedMovieData.startDateTime = new Date(validDateStr);
+  cleanedMovieData.ageRatings = {
+    rating: cleanedMovieData.rating
+  };
+  delete cleanedMovieData.rating;
+  return cleanedMovieData;
 }
 
 /**
@@ -502,14 +737,14 @@ function xmlGetValue(xmlArray, currentIndex, offset=0) {
     cinemaName:string,
     qrCodeUrl:string,
     ticket:string,
-    moviePoster:string
-   description: string,
-   starring: string[],
-   genres: string[],
-   ageRatings: Array<{
-     rating: string,
-     agency: string,
-     image: string
+    moviePoster:string,
+    description: string,
+    starring: string[],
+    genres: string[],
+    ageRatings: Array<{
+      rating: string,
+      agency: string,
+      image: string
    }>
   }} - An object containing the extracted movie information.
  */
@@ -549,6 +784,16 @@ function extractMovieInfo(emailBody, adTime=0) {
   let scriptObjArry = [];
   let retrieveScriptObj = false;
 
+  let performanceDetailsTable = [];
+  let retreivePerformanceDetailsTable = false;
+
+  // The reason why the regex does not enforce a number after the screen is due to the 'MAXX' screen
+  // See https://developer.mozilla.org/en-US/docs/Web/JavaScript/Guide/Regular_expressions/Character_classes for use of the special operators in regex
+  // When using 'RegExp', to escape characters a double '\' is required
+  // An example that would pass this regex is 16:50 | Belfast | Screen 7
+  // This is defined in the whole function scope as it is used for the bodyArry search and performanceDetailsTable statement
+  let screeningInfoRegex = new RegExp("\\d{1,2}:\\d{2} \\| \\w+ \\| Screen \\w+");
+
   for (let i=0; i<bodyArry.length-1; i++) {
     let line = bodyArry[i];
     let nextValue = "";
@@ -567,6 +812,17 @@ function extractMovieInfo(emailBody, adTime=0) {
 
     if(retrieveScriptObj) {
       scriptObjArry.push(line);
+    }
+
+    // Retrieves the table tag that contains the perofromance details
+    if (line.includes("<!-- 2) Performance details -->")) {
+      retreivePerformanceDetailsTable = true;
+    } else if(line.includes("</table>")) {
+      retreivePerformanceDetailsTable = false;
+    }
+
+    if (retreivePerformanceDetailsTable) {
+      performanceDetailsTable.push(line.trim());
     }
 
     // The relevant value, may be continued within the p tag of the next line, of the tag which contains the actual searched value
@@ -598,23 +854,16 @@ function extractMovieInfo(emailBody, adTime=0) {
     }
     imgLink = imgLink.replaceAll(' ', '%20');
 
-    // The reason why the regex does not enforce a number after the screen is due to the 'MAXX' screen
-    // See https://developer.mozilla.org/en-US/docs/Web/JavaScript/Guide/Regular_expressions/Character_classes for use of the special operators in regex
-    // When using 'RegExp', to escape characters a double '\' is required
-    // An example that would pass this regex is 16:50 | Belfast | Screen 7
-    let screenRegex = new RegExp("\\d{1,2}:\\d{2} \\| \\w+ \\| Screen \\w+");
-
     if(line.includes("RUNNING TIME")) {
       movie.runtime = strToTime(nextValue, adTime=adTime);
     } else if (line.includes("SCREEN") && !line.includes("TYPE")) {
       movie.screen = nextValue;
-    } else if (screenRegex.test(line)) {
-      let screenNumberPrefix = 'Screen ';
-      let screenStartIndex = line.indexOf(screenNumberPrefix);
-      // screenStartIndex = screenStartIndex + screenNumberPrefix.length;
-      movie.screen = line.substring(screenStartIndex, line.length-1);
-    } else if (line.includes("TIME")) {
-      movie.startTime = nextValue;
+    } else if (screeningInfoRegex.test(line)) {
+      let infoParts = line.split("|");
+      let locationIndex = 1;
+      let screenInfoIndex = 2;
+      movie.cinemaName = infoParts[locationIndex].trim();
+      movie.screen = infoParts[screenInfoIndex].trim();
     } else if (line.includes("SEATS") || line.includes("Seats:")) {
       // Previously 'SEATS' was sufficient but in the new format 'SEATS:' is required.
       // Also the old format required 'nextValue' while the new format requires 'currentValue', so 
@@ -640,33 +889,80 @@ function extractMovieInfo(emailBody, adTime=0) {
     ) {
       // the small version of the image is within the body of the email, but by swapping out 'small' with 'large' a larger version is retrieved (it appears a medium option is not available)
       movie.moviePoster = imgLink.replaceAll("/small/", "/large/");
+    } else if (line.includes("printathome") && !movie.ticket) {
+      let linkAttribute = 'href="';
+      let startIndex = line.indexOf(linkAttribute) + linkAttribute.length;
+      let startAtLinkAttribute = line.substring(startIndex, line.length);
+      let endIndex = startAtLinkAttribute.indexOf('"');
+      movie.ticket = startAtLinkAttribute.substring(0, endIndex);
     }
   }
 
-  // transform the scriptObjArry into a parsable format and then parse into an Object for easy information extraction
-  scriptObjArry[0] = "{";
-  scriptObj = JSON.parse(scriptObjArry.join(""));
+  // The data within the "scriptObjArry" is usually more accurate but omniplex removed this
+  // below is the replacement, it is important to have this before the scriptObjArry to allow for the data gathered here to be overwritten by it
+  if (performanceDetailsTable.length > 1) {
+    performanceDetailsTable.shift();
+    performanceDetailsTable.shift();
+    // { [Exception: Caught SAXException: org.xml.sax.SAXParseException; lineNumber: 1; columnNumber: 83; Element type "table" must be followed by either attribute specifications, ">" or "/>".] name: 'Exception' }
+    performanceDetailsTable[0] = "<table>"
+    let strTable = performanceDetailsTable.join("") + "</table>";
+    let tableDocument = XmlService.parse(strTable);
+    let innerTags = tableDocument.getDescendants();
+    for (let innerTag of innerTags) {
+      // @TODO Change this to something like innerTag.getType() == XmlService.Text
+      if (innerTag.getType().name() === 'TEXT') {
+        let unkownValue = innerTag.toString();
+        // This establishses if it is in '<Day of Week>, <Day of Month> <Month>' format, e.g. Monday, 28 Sep 
+        let dateTestParse = Date.parse(unkownValue);
+        // Only movie date, screen info and title is within the performanceDetailsTable, therefore title is just a process of elimination
+        if (isNaN(dateTestParse) && !screeningInfoRegex.test(unkownValue)) {
+          movie.title = unkownValue;
+        }
+      } 
+    }
+  }
 
-  // Adds the information from the script tag into the movie object
-  movie.cinemaName = scriptObj.reservationFor.location.name;
-  movie.location.streetAddress = scriptObj.reservationFor.location.address.streetAddress;
-  movie.location.addressLocality = scriptObj.reservationFor.location.address.addressLocality;
-  movie.location.addressRegion = scriptObj.reservationFor.location.address.addressRegion;
-  movie.location.postalCode = scriptObj.reservationFor.location.address.postalCode;
-  
-  movie.title = scriptObj.reservationFor.name;
-  console.log(movie.title);
-  movie.startDateTime = new Date(scriptObj.reservationFor.startDate);
+  if (scriptObjArry.length > 0) {
+      // transform the scriptObjArry into a parsable format and then parse into an Object for easy information extraction
+      scriptObjArry[0] = "{";
+      let scriptObj = JSON.parse(scriptObjArry.join(""));
+      // Below line is used for debugging
+      // for (let i=0; i<scriptObjArry.length; i++) { console.log(scriptObjArry[i]) }
+      // Adds the information from the script tag into the movie object
+      movie.cinemaName = scriptObj.reservationFor.location.name;
+      movie.location.streetAddress = scriptObj.reservationFor.location.address.streetAddress;
+      movie.location.addressLocality = scriptObj.reservationFor.location.address.addressLocality;
+      movie.location.addressRegion = scriptObj.reservationFor.location.address.addressRegion;
+      movie.location.postalCode = scriptObj.reservationFor.location.address.postalCode;
+      
+      movie.title = scriptObj.reservationFor.name;
+      movie.startDateTime = new Date(scriptObj.reservationFor.startDate);
 
-  movie.ticket = scriptObj.ticketDownloadUrl;
-  const whatsOnInfo = scrapeWhatsOn(movie.title);
+      movie.ticket = scriptObj.ticketDownloadUrl;
+  }
+
+  let ticketInfo = scrapePrintAtHomeTicket(movie.ticket);
+  // Omniplex changed the layout of their site on this day, therefore before this date, the legacy version must be used
+  const changeSiteDate = new Date(2026, 5, 31);
+  // Handles 'movie.startDateTime' being emtpy
+  let isLegacy = movie.startDateTime ? movie.startDateTime < changeSiteDate : false;
+  console.log(isLegacy);
+  console.log(movie);
+  const whatsOnInfo = scrapeWhatsOn(movie.title, location=movie.cinemaName, legacy=isLegacy);
+  // ageRatings, needs to be returned as an array but the
+  // ticket only contains one rating, therefore this must be 
+  // converted to an array
+  ticketInfo.ageRatings = [ ticketInfo.ageRatings ];
+
   // By putting 'movie' last it gives it's values precedence
-  enrichedMovie = {...movie, ...whatsOnInfo};
+  enrichedMovie = {...movie, ...ticketInfo, ...whatsOnInfo};
 
   if (movie.runtime.hours) {
     enrichedMovie.runtime = {...movie.runtime};
-  } else {
+  } else if (whatsOnInfo.runtime.hours) {
     enrichedMovie.runtime = {...whatsOnInfo.runtime};
+  } else {
+    enrichedMovie.runtime = { hours: 0, minutes: 0 }
   }
 
   return enrichedMovie;
